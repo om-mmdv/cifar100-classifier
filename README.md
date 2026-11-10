@@ -8,24 +8,25 @@
 
 
 
-\## Результаты
-
-
+## Результаты
 
 | Модель | Top-1 accuracy | Top-5 accuracy |
 |---|---|---|
 | SimpleCNN (20 эпох, CPU) | 63.65% | 88.62% |
-| SmallResNet (30 эпох, GPU T4) | **73.97%** | **XX.XX%** |
-### SmallResNet
-![Кривые обучения ResNet](assets/curves_resnet.png)
-
-SmallResNet точнее SimpleCNN примерно на 10 пунктов, но заметно переобучается
-(97.5% на обучении против 73.9% на тесте). Следующий шаг: более сильные
-аугментации (Cutout, MixUp).
+| SmallResNet (30 эпох, GPU T4) | **73.97%** | **93.07%** |
 
 Случайное угадывание дало бы 1%.
 
+### SmallResNet
+![Кривые обучения ResNet](assets/curves_resnet.png)
+![Точность по классам ResNet](assets/class_accuracy_resnet.png)
 
+SmallResNet точнее SimpleCNN примерно на 10 пунктов. Но модель заметно переобучается:
+97.5% на обучении против 73.9% на тесте. Следующий шаг: более сильные аугментации
+(Cutout, MixUp).
+
+Типичные ошибки: люди разного возраста и пола (man → boy, girl → woman),
+деревья (maple_tree → oak_tree) и похожие предметы (plate → bowl).
 
 \### Кривые обучения
 
