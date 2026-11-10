@@ -3,7 +3,7 @@
 
 Запуск (из папки проекта):
     python -m src.train --model simple --epochs 20
-    python -m src.train --model resnet --epochs 30
+    python -m src.train --model resnet --epochs 40 --strong-aug --label-smoothing 0.1 --mixup 0.2
 """
 
 import argparse
@@ -12,6 +12,7 @@ import os
 import time
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -25,8 +26,12 @@ def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def train_one_epoch(model, loader, loss_fn, optimizer, device):
-    """Одна эпоха обучения. Возвращает (средний loss, accuracy)."""
+def train_one_epoch(model, loader, loss_fn, optimizer, device, mixup_alpha=0.0):
+    """
+    Одна эпоха обучения. Возвращает (средний loss, accuracy).
+
+    mixup_alpha > 0 включает MixUp: картинки в порции смешиваются попарно.
+    """
     model.train()  # включаем режим обучения (работают Dropout и BatchNorm)
     total_loss, correct, total = 0.0, 0, 0
 
@@ -34,12 +39,24 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device):
         images, labels = images.to(device), labels.to(device)
 
         optimizer.zero_grad()              # 1. сбрасываем старые подсказки
-        outputs = model(images)            # 2. сеть угадывает
-        loss = loss_fn(outputs, labels)    # 3. считаем ошибку
+
+        if mixup_alpha > 0:
+            # MixUp: берём долю lam от одной картинки и (1 - lam) от другой
+            lam = np.random.beta(mixup_alpha, mixup_alpha)
+            order = torch.randperm(images.size(0), device=device)
+            mixed = lam * images + (1 - lam) * images[order]
+            outputs = model(mixed)         # 2. сеть угадывает по смеси
+            # Ошибка считается по обоим "ответам" с весами lam и (1 - lam)
+            loss = lam * loss_fn(outputs, labels) + (1 - lam) * loss_fn(outputs, labels[order])
+        else:
+            outputs = model(images)        # 2. сеть угадывает
+            loss = loss_fn(outputs, labels)  # 3. считаем ошибку
+
         loss.backward()                    # 4. ищем, какие веса виноваты
         optimizer.step()                   # 5. чуть-чуть исправляем веса
 
         total_loss += loss.item() * images.size(0)
+        # При MixUp train acc приблизительная (смешанные картинки), это нормально
         correct += (outputs.argmax(dim=1) == labels).sum().item()
         total += labels.size(0)
 
@@ -100,16 +117,25 @@ def main():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.05, help="размер шага обучения")
+    parser.add_argument("--strong-aug", action="store_true",
+                        help="добавить Cutout (случайный закрашенный квадрат)")
+    parser.add_argument("--label-smoothing", type=float, default=0.0,
+                        help="сглаживание ответов, например 0.1")
+    parser.add_argument("--mixup", type=float, default=0.0,
+                        help="сила MixUp, например 0.2 (0 = выключен)")
     args = parser.parse_args()
 
     os.makedirs("outputs", exist_ok=True)
     device = get_device()
     print(f"Модель: {args.model} | Эпох: {args.epochs} | Устройство: {device}")
+    print(f"Cutout: {args.strong_aug} | Label smoothing: {args.label_smoothing} | MixUp: {args.mixup}")
 
     # Данные, модель, функция потерь, оптимизатор
-    train_loader, test_loader, _ = get_dataloaders(batch_size=args.batch_size)
+    train_loader, test_loader, _ = get_dataloaders(
+        batch_size=args.batch_size, strong_aug=args.strong_aug
+    )
     model = get_model(args.model).to(device)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     optimizer = torch.optim.SGD(
         model.parameters(), lr=args.lr, momentum=0.9,
         weight_decay=5e-4, nesterov=True,
@@ -124,7 +150,9 @@ def main():
     for epoch in range(1, args.epochs + 1):
         start = time.time()
 
-        train_loss, train_acc = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, loss_fn, optimizer, device, mixup_alpha=args.mixup
+        )
         test_loss, test_acc = evaluate(model, test_loader, loss_fn, device)
         scheduler.step()
 
